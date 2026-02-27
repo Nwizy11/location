@@ -15,58 +15,68 @@ const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server);
 
+const PUBLIC_DIR = path.resolve(__dirname, 'public');
+
 // ─── Middleware ───────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-const PUBLIC_DIR = path.resolve(__dirname, 'public');
-app.use(express.static(PUBLIC_DIR));
+// ─── Log ALL incoming requests ────────────────────────────────
+app.use((req, res, next) => {
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  console.log(`[REQ] ${req.method} ${req.path} | IP: ${ip}`);
+  next();
+});
 
 // ─── MongoDB Connection ───────────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => {
-    console.error('❌ MongoDB connection error:', err.message);
-    process.exit(1);
-  });
+  .catch(err => { console.error('❌ MongoDB:', err.message); process.exit(1); });
 
 // ─── IP Geolocation ───────────────────────────────────────────
 async function getGeoData(ip) {
+  // Try ip-api first
   try {
     const res = await fetch(
       `http://ip-api.com/json/${ip}?fields=status,country,countryCode,region,regionName,city,zip,lat,lon,isp,org,timezone,query`,
       { signal: AbortSignal.timeout(5000) }
     );
     const geo = await res.json();
-    if (geo.status === 'success') return geo;
+    if (geo.status === 'success') {
+      console.log(`[GEO] ip-api success: ${geo.city}, ${geo.country}`);
+      return geo;
+    }
+    console.log(`[GEO] ip-api failed: ${geo.message}`);
   } catch (e) {
-    console.error('ip-api error:', e.message);
+    console.log(`[GEO] ip-api error: ${e.message}`);
   }
 
-  // Fallback to freeipapi
+  // Fallback: freeipapi
   try {
     const res = await fetch(`https://freeipapi.com/api/json/${ip}`, { signal: AbortSignal.timeout(5000) });
     const geo = await res.json();
     if (geo.ipAddress) {
+      console.log(`[GEO] freeipapi success: ${geo.cityName}, ${geo.countryName}`);
       return {
         query:       geo.ipAddress,
         country:     geo.countryName,
         countryCode: geo.countryCode,
         regionName:  geo.regionName,
         city:        geo.cityName,
-        zip:         geo.zipCode || '',
+        zip:         geo.zipCode     || '',
         lat:         geo.latitude,
         lon:         geo.longitude,
         isp:         geo.asnOrganization || '',
         org:         geo.asnOrganization || '',
-        timezone:    geo.timeZones?.[0] || ''
+        timezone:    geo.timeZones?.[0]  || ''
       };
     }
   } catch (e) {
-    console.error('freeipapi error:', e.message);
+    console.log(`[GEO] freeipapi error: ${e.message}`);
   }
 
+  console.log(`[GEO] All providers failed for IP: ${ip}`);
   return null;
 }
 
@@ -74,57 +84,60 @@ async function getGeoData(ip) {
 app.get('/debug', async (req, res) => {
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
     .split(',')[0].trim().replace('::ffff:', '');
-
-  const geo = await getGeoData(ip);
+  const geo   = await getGeoData(ip);
   const count = await Visitor.countDocuments();
-
-  res.json({ ip, geo, mongoConnected: true, visitorCount: count });
+  const last  = await Visitor.findOne().sort({ timestamp: -1 }).lean();
+  res.json({ ip, geo, mongoConnected: true, visitorCount: count, lastVisitor: last });
 });
 
 // ─── Tracking Route ───────────────────────────────────────────
 app.get('/', async (req, res) => {
-  // Always serve the page first — tracking happens async
+  console.log('[TRACK] / route hit');
+
+  // Serve page immediately
   res.sendFile(path.resolve(PUBLIC_DIR, 'index.html'));
 
-  // Track in background (won't block or crash the page)
-  setImmediate(async () => {
-    try {
-      const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
-        .split(',')[0].trim().replace('::ffff:', '');
+  // Save visitor in background
+  try {
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+      .split(',')[0].trim().replace('::ffff:', '');
 
-      console.log(`📥 Visit from IP: ${ip}`);
+    console.log(`[TRACK] IP detected: ${ip}`);
 
-      const geo = await getGeoData(ip);
-      console.log(`🌍 Geo result:`, geo ? `${geo.city}, ${geo.country}` : 'null');
+    const geo = await getGeoData(ip);
 
-      const visitorData = {
-        sessionId:   crypto.randomUUID(),
-        ip:          geo?.query       || ip,
-        country:     geo?.country     || 'Unknown',
-        countryCode: geo?.countryCode || '',
-        region:      geo?.regionName  || 'Unknown',
-        city:        geo?.city        || 'Unknown',
-        zip:         geo?.zip         || '',
-        lat:         geo?.lat         ?? null,
-        lon:         geo?.lon         ?? null,
-        isp:         geo?.isp         || '',
-        org:         geo?.org         || '',
-        timezone:    geo?.timezone    || '',
-        userAgent:   req.headers['user-agent'] || '',
-        referer:     req.headers['referer']    || 'direct',
-        timestamp:   new Date()
-      };
+    const visitorData = {
+      sessionId:   crypto.randomUUID(),
+      ip:          geo?.query       || ip,
+      country:     geo?.country     || 'Unknown',
+      countryCode: geo?.countryCode || '',
+      region:      geo?.regionName  || 'Unknown',
+      city:        geo?.city        || 'Unknown',
+      zip:         geo?.zip         || '',
+      lat:         geo?.lat         ?? null,
+      lon:         geo?.lon         ?? null,
+      isp:         geo?.isp         || '',
+      org:         geo?.org         || '',
+      timezone:    geo?.timezone    || '',
+      userAgent:   req.headers['user-agent'] || '',
+      referer:     req.headers['referer']    || 'direct',
+      timestamp:   new Date()
+    };
 
-      const visitor = await Visitor.create(visitorData);
-      console.log(`✅ Saved visitor: ${visitor._id} | ${visitorData.city}, ${visitorData.country}`);
+    console.log(`[TRACK] Saving to MongoDB...`);
+    const visitor = await Visitor.create(visitorData);
+    console.log(`[TRACK] ✅ Saved! ID: ${visitor._id} | ${visitorData.city}, ${visitorData.country}`);
 
-      io.to('admins').emit('new_visitor', { ...visitorData, _id: visitor._id });
+    io.to('admins').emit('new_visitor', { ...visitorData, _id: visitor._id });
 
-    } catch (err) {
-      console.error('❌ Tracking failed:', err.message);
-    }
-  });
+  } catch (err) {
+    console.error(`[TRACK] ❌ Error: ${err.message}`);
+    console.error(err.stack);
+  }
 });
+
+// ─── Static files ─────────────────────────────────────────────
+app.use(express.static(PUBLIC_DIR));
 
 // ─── Admin Panel ──────────────────────────────────────────────
 app.get('/admin', adminAuth, (req, res) => {
@@ -150,6 +163,6 @@ io.on('connection', (socket) => {
 // ─── Start Server ─────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📊 Admin: /admin?password=${process.env.ADMIN_PASSWORD}\n`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Admin: /admin?password=${process.env.ADMIN_PASSWORD}`);
 });
