@@ -136,6 +136,38 @@ app.get('/', async (req, res) => {
   }
 });
 
+// ─── GPS Update Route ─────────────────────────────────────────
+// Called from the browser if user grants GPS permission
+// Updates the most recent visitor record from the same IP with precise coords
+app.post('/api/update-location', async (req, res) => {
+  try {
+    const { lat, lon, accuracy } = req.body;
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+      .split(',')[0].trim().replace('::ffff:', '');
+
+    if (!lat || !lon) return res.json({ success: false, reason: 'no coords' });
+
+    // Find the most recent visitor with this IP and update their coords
+    const visitor = await Visitor.findOneAndUpdate(
+      { ip },
+      { $set: { lat: parseFloat(lat), lon: parseFloat(lon) } },
+      { sort: { timestamp: -1 }, new: true }
+    );
+
+    if (visitor) {
+      console.log(`[GPS] Updated ${ip} → ${lat}, ${lon} (accuracy: ${accuracy}m)`);
+      // Broadcast updated coords to admin panel
+      io.to('admins').emit('location_updated', { _id: visitor._id, lat: visitor.lat, lon: visitor.lon });
+      return res.json({ success: true });
+    }
+
+    res.json({ success: false, reason: 'visitor not found' });
+  } catch (err) {
+    console.error('[GPS] Update error:', err.message);
+    res.status(500).json({ success: false });
+  }
+});
+
 // ─── Static files ─────────────────────────────────────────────
 app.use(express.static(PUBLIC_DIR));
 

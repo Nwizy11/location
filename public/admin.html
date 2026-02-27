@@ -276,8 +276,8 @@
       <div class="card-grid">
         <div class="field">IP Address: <b>${v.ip || 'N/A'}</b></div>
         <div class="field">ZIP Code: <b>${v.zip || 'N/A'}</b></div>
-        <div class="field">Coordinates: <b>${(v.lat != null && v.lon != null) ? `${Number(v.lat).toFixed(4)}, ${Number(v.lon).toFixed(4)}` : 'N/A'}</b></div>
-        <div class="field">Maps: <b>${(v.lat != null && v.lon != null) ? `<a href='https://maps.google.com/?q=${v.lat},${v.lon}' target='_blank' style='color:var(--accent)'>Open in Google Maps</a>` : 'N/A'}</b></div>
+        <div class="field">Coordinates: <span class="coord-value"><b>${(v.lat != null && v.lon != null) ? `${Number(v.lat).toFixed(4)}, ${Number(v.lon).toFixed(4)}` : 'Waiting for GPS...'}</b></span></div>
+        <div class="field">Maps: <span class="maps-value"><b>${(v.lat != null && v.lon != null) ? `<a href='https://maps.google.com/?q=${v.lat},${v.lon}' target='_blank' style='color:var(--accent)'>Open in Google Maps</a>` : 'N/A'}</b></span></div>
         <div class="field">ISP: <b>${v.isp || 'N/A'}</b></div>
         <div class="field">Org: <b>${v.org || 'N/A'}</b></div>
         <div class="field">Timezone: <b>${v.timezone || 'N/A'}</b></div>
