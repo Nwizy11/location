@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Admin Panel — Location Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --surface2: #1e1e1e;
+      --border: #2a2a2a;
+      --accent: #00e5ff;
+      --accent2: #7c3aed;
+      --text: #e2e2e2;
+      --muted: #666;
+      --danger: #ff4444;
+      --success: #00c853;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; }
+    .live-dot {
+      width: 10px; height: 10px; background: var(--accent);
+      border-radius: 50%; animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,229,255,.4); }
+      50%       { opacity: .6; box-shadow: 0 0 0 6px rgba(0,229,255,0); }
+    }
+    .header-actions { display: flex; gap: 10px; }
+    .btn {
+      padding: 8px 16px; border-radius: 6px; border: none;
+      font-size: 13px; cursor: pointer; font-weight: 600; transition: opacity .2s;
+    }
+    .btn:hover { opacity: .8; }
+    .btn-outline {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-danger { background: var(--danger); color: #fff; }
+
+    /* ── Stats Bar ── */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+      padding: 20px 28px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+    .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .stat-value { font-size: 26px; font-weight: 700; color: var(--accent); }
+    .stat-sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Main layout ── */
+    .main { padding: 0 28px 28px; display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+    @media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
+
+    /* ── Feed ── */
+    .feed-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .feed-title { font-size: 15px; font-weight: 600; }
+    #search {
+      padding: 7px 12px; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; font-size: 13px; width: 220px;
+    }
+    #feed { display: flex; flex-direction: column; gap: 10px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      padding: 14px 16px;
+      animation: slideIn .35s ease;
+      position: relative;
+    }
+    .card.new { border-left-color: var(--success); }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .card-header {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; margin-bottom: 10px;
+    }
+    .card-location { font-size: 15px; font-weight: 600; }
+    .card-time { font-size: 11px; color: var(--muted); }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 6px;
+    }
+    .field { font-size: 12px; color: var(--muted); }
+    .field b { color: var(--text); font-weight: 500; }
+    .delete-btn {
+      position: absolute; top: 10px; right: 10px;
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 16px; line-height: 1;
+      transition: color .2s;
+    }
+    .delete-btn:hover { color: var(--danger); }
+
+    /* ── Sidebar ── */
+    .sidebar { display: flex; flex-direction: column; gap: 16px; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 18px;
+    }
+    .panel h3 { font-size: 13px; color: var(--muted); margin-bottom: 14px; text-transform: uppercase; letter-spacing: .06em; }
+    .rank-item {
+      display: flex; align-items: center;
+      justify-content: space-between; padding: 6px 0;
+      border-bottom: 1px solid var(--border); font-size: 13px;
+    }
+    .rank-item:last-child { border-bottom: none; }
+    .rank-name { color: var(--text); }
+    .rank-count { color: var(--accent); font-weight: 700; font-size: 13px; }
+    .bar {
+      height: 4px; background: var(--border); border-radius: 2px;
+      margin-top: 4px; overflow: hidden;
+    }
+    .bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .6s; }
+
+    /* ── Empty ── */
+    #empty {
+      color: var(--muted); font-size: 14px;
+      text-align: center; padding: 60px 0;
+    }
+
+    /* ── Pagination ── */
+    #pagination {
+      display: flex; gap: 8px; justify-content: center;
+      margin-top: 20px;
+    }
+    .page-btn {
+      padding: 6px 14px; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .page-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .page-btn:disabled { opacity: .4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="live-dot"></div>
+    Location Tracker — Admin
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-outline" onclick="exportCSV()">⬇ Export CSV</button>
+    <button class="btn btn-danger" onclick="clearAll()">🗑 Clear All</button>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="stats-bar">
+  <div class="stat-card">
+    <div class="stat-label">Total Visitors</div>
+    <div class="stat-value" id="stat-total">—</div>
+    <div class="stat-sub">All time</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Last 7 Days</div>
+    <div class="stat-value" id="stat-recent">—</div>
+    <div class="stat-sub">New visitors</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Top City</div>
+    <div class="stat-value" id="stat-city" style="font-size:16px;margin-top:4px">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Top Country</div>
+    <div class="stat-value" id="stat-country" style="font-size:16px;margin-top:4px">—</div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main">
+  <!-- Feed -->
+  <div>
+    <div class="feed-header">
+      <div class="feed-title">Recent Visitors</div>
+      <input id="search" type="text" placeholder="🔍 Search city, country, IP…" oninput="filterCards()"/>
+    </div>
+    <div id="feed">
+      <p id="empty">⏳ Waiting for visitors... Share your link!</p>
+    </div>
+    <div id="pagination"></div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="panel">
+      <h3>🌍 Top Countries</h3>
+      <div id="top-countries">—</div>
+    </div>
+    <div class="panel">
+      <h3>🏙 Top Cities</h3>
+      <div id="top-cities">—</div>
+    </div>
+    <div class="panel">
+      <h3>📡 Top ISPs</h3>
+      <div id="top-isps">—</div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  socket.emit('join_admin');
+
+  let allCards = [];
+
+  // ── Socket events ──────────────────────────────
+  socket.on('init_visitors', (visitors) => {
+    visitors.forEach(v => addCard(v, false));
+    loadStats();
+  });
+
+  socket.on('new_visitor', (v) => {
+    addCard(v, true);
+    loadStats();
+  });
+
+  // ── Add visitor card ───────────────────────────
+  function addCard(v, isNew = false) {
+    document.getElementById('empty')?.remove();
+
+    const card = document.createElement('div');
+    card.className = 'card' + (isNew ? ' new' : '');
+    card.dataset.text = `${v.city} ${v.country} ${v.ip} ${v.isp} ${v.region}`.toLowerCase();
+    card.dataset.id = v._id;
+
+    card.innerHTML = `
+      <button class="delete-btn" onclick="deleteVisitor('${v._id}', this)" title="Delete">✕</button>
+      <div class="card-header">
+        <div class="card-location">
+          📍 ${v.city || 'Unknown'}, ${v.region || ''}, ${v.country || 'Unknown'}
+          ${v.countryCode ? `<span style="font-size:12px;color:var(--muted)">(${v.countryCode})</span>` : ''}
+        </div>
+        <div class="card-time">${new Date(v.timestamp).toLocaleString()}</div>
+      </div>
+      <div class="card-grid">
+        <div class="field">IP Address: <b>${v.ip || 'N/A'}</b></div>
+        <div class="field">ZIP Code: <b>${v.zip || 'N/A'}</b></div>
+        <div class="field">Coordinates: <b>${(v.lat != null && v.lon != null) ? `${Number(v.lat).toFixed(4)}, ${Number(v.lon).toFixed(4)}` : 'N/A'}</b></div>
+        <div class="field">Maps: <b>${(v.lat != null && v.lon != null) ? `<a href='https://maps.google.com/?q=${v.lat},${v.lon}' target='_blank' style='color:var(--accent)'>Open in Google Maps</a>` : 'N/A'}</b></div>
+        <div class="field">ISP: <b>${v.isp || 'N/A'}</b></div>
+        <div class="field">Org: <b>${v.org || 'N/A'}</b></div>
+        <div class="field">Timezone: <b>${v.timezone || 'N/A'}</b></div>
+        <div class="field">Referrer: <b>${v.referer || 'direct'}</b></div>
+        <div class="field" style="grid-column:1/-1">Browser: <b>${(v.userAgent || '').substring(0, 80)}${v.userAgent?.length > 80 ? '...' : ''}</b></div>
+      </div>
+    `;
+
+    allCards.unshift(card);
+    document.getElementById('feed').prepend(card);
+
+    if (isNew) {
+      setTimeout(() => card.classList.remove('new'), 3000);
+    }
+  }
+
+  // ── Load stats ────────────────────────────────
+  async function loadStats() {
+    try {
+      const res  = await fetch('/api/visitors/stats');
+      const data = await res.json();
+
+      document.getElementById('stat-total').textContent  = data.total;
+      document.getElementById('stat-recent').textContent = data.recentCount;
+      document.getElementById('stat-city').textContent    = data.topCities[0]?._id    || '—';
+      document.getElementById('stat-country').textContent = data.topCountries[0]?._id || '—';
+
+      renderRanks('top-countries', data.topCountries);
+      renderRanks('top-cities',    data.topCities);
+      renderRanks('top-isps',      data.topISPs);
+    } catch (e) {
+      console.error('Stats error:', e);
+    }
+  }
+
+  function renderRanks(elId, items) {
+    const el = document.getElementById(elId);
+    if (!items?.length) { el.innerHTML = '<p style="color:var(--muted);font-size:13px">No data yet</p>'; return; }
+    const max = items[0].count;
+    el.innerHTML = items.map(item => `
+      <div class="rank-item">
+        <div>
+          <div class="rank-name">${item._id || 'Unknown'}</div>
+          <div class="bar"><div class="bar-fill" style="width:${(item.count/max*100).toFixed(0)}%"></div></div>
+        </div>
+        <div class="rank-count">${item.count}</div>
+      </div>
+    `).join('');
+  }
+
+  // ── Search ────────────────────────────────────
+  function filterCards() {
+    const q = document.getElementById('search').value.toLowerCase();
+    allCards.forEach(c => {
+      c.style.display = c.dataset.text.includes(q) ? '' : 'none';
+    });
+  }
+
+  // ── Delete one ────────────────────────────────
+  async function deleteVisitor(id, btn) {
+    if (!confirm('Delete this visitor?')) return;
+    try {
+      await fetch(`/api/visitors/${id}`, { method: 'DELETE' });
+      btn.closest('.card').remove();
+      allCards = allCards.filter(c => c.dataset.id !== id);
+      loadStats();
+    } catch (e) {
+      alert('Delete failed');
+    }
+  }
+
+  // ── Clear all ─────────────────────────────────
+  async function clearAll() {
+    if (!confirm('Delete ALL visitors? This cannot be undone.')) return;
+    try {
+      await fetch('/api/visitors', { method: 'DELETE' });
+      document.getElementById('feed').innerHTML = '<p id="empty">⏳ Waiting for visitors... Share your link!</p>';
+      allCards = [];
+      loadStats();
+    } catch (e) {
+      alert('Failed to clear');
+    }
+  }
+
+  // ── Export CSV ────────────────────────────────
+  async function exportCSV() {
+    try {
+      const res  = await fetch('/api/visitors?limit=10000');
+      const data = await res.json();
+      const rows = [
+        ['Timestamp','IP','City','Region','Country','ZIP','Lat','Lon','ISP','Org','Timezone','Referrer','UserAgent'],
+        ...data.visitors.map(v => [
+          v.timestamp, v.ip, v.city, v.region, v.country,
+          v.zip, v.lat, v.lon, v.isp, v.org, v.timezone, v.referer,
+          `"${(v.userAgent||'').replace(/"/g,'""')}"`
+        ])
+      ];
+      const csv  = rows.map(r => r.join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `visitors-${Date.now()}.csv`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Export failed');
+    }
+  }
+
+  // Load initial stats
+  loadStats();
+</script>
+</body>
+</html>
