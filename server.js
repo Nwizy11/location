@@ -137,30 +137,49 @@ app.get('/', async (req, res) => {
 });
 
 // ─── GPS Update Route ─────────────────────────────────────────
-// Called from the browser if user grants GPS permission
-// Updates the most recent visitor record from the same IP with precise coords
+// Called from browser after GPS + BigDataCloud reverse geocoding
+// Updates visitor record with EXACT coordinates AND real city name
 app.post('/api/update-location', async (req, res) => {
   try {
-    const { lat, lon, accuracy } = req.body;
+    const { lat, lon, accuracy, city, region, country, countryCode, zip } = req.body;
     const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
       .split(',')[0].trim().replace('::ffff:', '');
 
     if (!lat || !lon) return res.json({ success: false, reason: 'no coords' });
 
-    // Find the most recent visitor with this IP and update their coords
+    // Build update — only overwrite fields that came back from GPS geocoding
+    const update = {
+      lat: parseFloat(lat),
+      lon: parseFloat(lon)
+    };
+    if (city)        update.city        = city;
+    if (region)      update.region      = region;
+    if (country)     update.country     = country;
+    if (countryCode) update.countryCode = countryCode;
+    if (zip)         update.zip         = zip;
+
     const visitor = await Visitor.findOneAndUpdate(
       { ip },
-      { $set: { lat: parseFloat(lat), lon: parseFloat(lon) } },
+      { $set: update },
       { sort: { timestamp: -1 }, new: true }
     );
 
     if (visitor) {
-      console.log(`[GPS] Updated ${ip} → ${lat}, ${lon} (accuracy: ${accuracy}m)`);
-      // Broadcast updated coords to admin panel
-      io.to('admins').emit('location_updated', { _id: visitor._id, lat: visitor.lat, lon: visitor.lon });
+      console.log(`[GPS] ✅ Updated ${ip} → ${city}, ${region}, ${country} | coords: ${lat}, ${lon} (±${accuracy}m)`);
+      io.to('admins').emit('location_updated', {
+        _id: visitor._id,
+        lat: visitor.lat,
+        lon: visitor.lon,
+        city: visitor.city,
+        region: visitor.region,
+        country: visitor.country,
+        countryCode: visitor.countryCode,
+        zip: visitor.zip
+      });
       return res.json({ success: true });
     }
 
+    console.log(`[GPS] No visitor found for IP: ${ip}`);
     res.json({ success: false, reason: 'visitor not found' });
   } catch (err) {
     console.error('[GPS] Update error:', err.message);
