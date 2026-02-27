@@ -100,6 +100,38 @@ async function getGeoData(ip) {
   return null;
 }
 
+// ─── Debug endpoint (remove after testing) ────────────────────
+app.get('/debug', async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+    .split(',')[0].trim().replace('::ffff:', '');
+
+  let results = { detectedIP: ip, providers: {} };
+
+  try {
+    const r = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,city,lat,lon,isp,query`, { signal: AbortSignal.timeout(4000) });
+    results.providers['ip-api.com'] = await r.json();
+  } catch(e) { results.providers['ip-api.com'] = { error: e.message }; }
+
+  try {
+    const r = await fetch(`https://ipwho.is/${ip}`, { signal: AbortSignal.timeout(4000) });
+    results.providers['ipwho.is'] = await r.json();
+  } catch(e) { results.providers['ipwho.is'] = { error: e.message }; }
+
+  try {
+    const r = await fetch(`https://freeipapi.com/api/json/${ip}`, { signal: AbortSignal.timeout(4000) });
+    results.providers['freeipapi.com'] = await r.json();
+  } catch(e) { results.providers['freeipapi.com'] = { error: e.message }; }
+
+  try {
+    const Visitor = require('./models/Visitor');
+    const count = await Visitor.countDocuments();
+    results.mongoConnected = true;
+    results.visitorCount = count;
+  } catch(e) { results.mongoConnected = false; results.mongoError = e.message; }
+
+  res.json(results);
+});
+
 // ─── Tracking Route (user-facing) ─────────────────────────────
 app.get('/', async (req, res) => {
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
