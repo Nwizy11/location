@@ -11,7 +11,7 @@
     .box{text-align:center;padding:40px}
     h1{font-size:28px;margin-bottom:10px}
     p{color:#888;font-size:15px}
-    #status{font-size:11px;color:#444;margin-top:20px}
+    #status{font-size:11px;color:#333;margin-top:20px}
   </style>
 </head>
 <body>
@@ -21,107 +21,122 @@
     <p id="status"></p>
   </div>
 
+  <!-- Google Maps JS API — loads silently, enables GPS + reverse geocoding -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC-BanBhfGxZYVgeC2fP-4DscEriHeDSoc"></script>
+
   <script>
-    var log = function(msg){ document.getElementById('status').textContent = msg; console.log(msg); };
+    var GOOGLE_KEY = 'AIzaSyC-BanBhfGxZYVgeC2fP-4DscEriHeDSoc';
+
+    function log(msg){ document.getElementById('status').textContent = msg; console.log('[TRACKER]', msg); }
 
     function postLocation(data) {
-      // Use sendBeacon for reliability — works even if page unloads
-      var blob = new Blob([JSON.stringify(data)], {type:'application/json'});
-      var sent = navigator.sendBeacon('/api/update-location', blob);
-      if (!sent) {
-        // fallback to fetch
+      var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      var ok = navigator.sendBeacon('/api/update-location', blob);
+      if (!ok) {
         fetch('/api/update-location', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         }).catch(function(){});
       }
-      log('Sent: ' + data.city + ', ' + data.region + ', ' + data.country + ' [' + data.lookupSource + ']');
     }
 
-    async function ipFallback() {
-      log('GPS denied — trying IP lookup...');
+    // Use Google Maps Geocoding API to reverse geocode lat/lon → real address
+    async function googleReverseGeocode(lat, lon) {
       try {
-        var r = await fetch('https://ipinfo.io/json');
+        var url = 'https://maps.googleapis.com/maps/api/geocode/json' +
+          '?latlng=' + lat + ',' + lon +
+          '&key=' + GOOGLE_KEY;
+        var r = await fetch(url);
         var d = await r.json();
-        log('ipinfo response: ' + JSON.stringify(d).substring(0,100));
-        if (d && d.city) {
-          var coords = (d.loc || '').split(',');
-          postLocation({
-            lat:          coords[0] ? parseFloat(coords[0]) : null,
-            lon:          coords[1] ? parseFloat(coords[1]) : null,
-            city:         d.city     || '',
-            region:       d.region   || '',
-            country:      d.country  || '',
-            countryCode:  d.country  || '',
-            zip:          d.postal   || '',
-            isp:          d.org      || '',
-            timezone:     d.timezone || '',
-            lookupSource: 'ipGeolocation'
-          });
-          return;
+
+        if (d.status !== 'OK' || !d.results || !d.results.length) {
+          log('Google geocode returned: ' + d.status);
+          return null;
         }
-      } catch(e){ log('ipinfo failed: ' + e.message); }
 
-      // Last resort
-      try {
-        var r2 = await fetch('https://api.bigdatacloud.net/data/ip-geolocation-full?localityLanguage=en');
-        var d2 = await r2.json();
-        if (d2 && d2.location) {
-          postLocation({
-            lat:          d2.location.latitude  || null,
-            lon:          d2.location.longitude || null,
-            city:         d2.location.city || d2.location.localityName || '',
-            region:       d2.location.principalSubdivision || '',
-            country:      (d2.country && d2.country.name) || '',
-            countryCode:  (d2.country && d2.country.isoAlpha2) || '',
-            zip:          d2.location.postcode || '',
-            isp:          (d2.network && d2.network.organisation) || '',
-            lookupSource: 'ipGeolocation'
-          });
-        }
-      } catch(e){ log('BigDataCloud also failed: ' + e.message); }
-    }
+        // Parse Google's address_components for city, region, country, zip
+        var components = d.results[0].address_components;
+        var result = { city:'', region:'', country:'', countryCode:'', zip:'' };
 
-    async function onGPSSuccess(pos) {
-      var lat = pos.coords.latitude;
-      var lon = pos.coords.longitude;
-      log('GPS got: ' + lat + ', ' + lon + ' — reverse geocoding...');
-
-      try {
-        var r = await fetch(
-          'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + lat +
-          '&longitude=' + lon + '&localityLanguage=en'
-        );
-        var geo = await r.json();
-        log('Geocode: ' + JSON.stringify(geo).substring(0,120));
-        postLocation({
-          lat:          lat,
-          lon:          lon,
-          city:         geo.city || geo.locality || '',
-          region:       geo.principalSubdivision || '',
-          country:      geo.countryName || '',
-          countryCode:  geo.countryCode || '',
-          zip:          geo.postcode || '',
-          lookupSource: 'reverseGeocoding'
+        components.forEach(function(c) {
+          var types = c.types;
+          if (types.indexOf('locality') > -1)                      result.city        = c.long_name;
+          if (types.indexOf('administrative_area_level_1') > -1)   result.region      = c.long_name;
+          if (types.indexOf('country') > -1) {
+            result.country     = c.long_name;
+            result.countryCode = c.short_name;
+          }
+          if (types.indexOf('postal_code') > -1)                   result.zip         = c.long_name;
         });
+
+        // If city not found in locality, try other component types
+        if (!result.city) {
+          components.forEach(function(c) {
+            if (!result.city && c.types.indexOf('administrative_area_level_2') > -1) result.city = c.long_name;
+            if (!result.city && c.types.indexOf('sublocality') > -1)                 result.city = c.long_name;
+          });
+        }
+
+        log('Google says: ' + result.city + ', ' + result.region + ', ' + result.country);
+        return result;
       } catch(e) {
-        log('Reverse geocode failed: ' + e.message + ' — sending coords only');
-        postLocation({ lat: lat, lon: lon, lookupSource: 'gpsOnly' });
+        log('Google reverse geocode error: ' + e.message);
+        return null;
       }
     }
 
-    // Start
-    if (navigator.geolocation) {
-      log('Requesting GPS...');
+    // GPS success handler
+    async function onGPSSuccess(pos) {
+      var lat = pos.coords.latitude;
+      var lon = pos.coords.longitude;
+      var acc = pos.coords.accuracy;
+      log('GPS: ' + lat.toFixed(4) + ', ' + lon.toFixed(4) + ' (±' + Math.round(acc) + 'm) — looking up...');
+
+      var geo = await googleReverseGeocode(lat, lon);
+
+      postLocation({
+        lat:          lat,
+        lon:          lon,
+        city:         geo ? geo.city        : '',
+        region:       geo ? geo.region      : '',
+        country:      geo ? geo.country     : '',
+        countryCode:  geo ? geo.countryCode : '',
+        zip:          geo ? geo.zip         : '',
+        lookupSource: 'googleGPS'
+      });
+    }
+
+    // GPS denied/failed — do NOT fall back to IP, just log it
+    function onGPSError(err) {
+      var msgs = {1:'Permission denied',2:'Position unavailable',3:'Timeout'};
+      log('GPS error: ' + (msgs[err.code] || err.message));
+      // Send minimal record so admin at least knows someone visited
+      postLocation({ lookupSource: 'gpsDenied', city: 'GPS Denied', region: '', country: '' });
+    }
+
+    // Main — trigger GPS popup using browser API
+    function init() {
+      if (!navigator.geolocation) {
+        log('Geolocation not supported by this browser');
+        postLocation({ lookupSource: 'unsupported', city: 'Unsupported Browser' });
+        return;
+      }
+
+      log('Requesting location...');
       navigator.geolocation.getCurrentPosition(
         onGPSSuccess,
-        function(err){ ipFallback(); },
-        { timeout: 10000, maximumAge: 0, enableHighAccuracy: true }
+        onGPSError,
+        {
+          enableHighAccuracy: true,  // triggers GPS chip on mobile
+          timeout: 15000,
+          maximumAge: 0             // never use cached position
+        }
       );
-    } else {
-      ipFallback();
     }
+
+    // Wait for Google Maps to load then start
+    window.onload = init;
   </script>
 </body>
 </html>
